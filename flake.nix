@@ -15,7 +15,12 @@
         pkgs = nixpkgs.legacyPackages.${system};
       in
       {
-        devShells.default = pkgs.mkShell { packages = [ pkgs.uv ]; };
+        devShells.default = pkgs.mkShell {
+          packages = [
+            pkgs.uv
+            pkgs.postgresql
+          ];
+        };
       }
     );
 }
