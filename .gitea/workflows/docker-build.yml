@@ -27,36 +27,30 @@ jobs:
       - name: Log in to Docker Registry
         run: echo "${{ secrets.DOCKER_REGISTRY_PASSWORD }}" | docker login ${{ env.DOCKER_REGISTRY }} -u ${{ secrets.DOCKER_REGISTRY_USERNAME }} --password-stdin
 
-      - name: Debug Image Name
+      - name: Set Image Tag
+        id: tag
         run: |
-          IMAGE_NAME="${{ env.DOCKER_REGISTRY }}/${{ env.REPOSITORY }}"
-          TAG="latest"
-          echo "Docker Image Name: $IMAGE_NAME:$TAG"
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref_name }}" == "dev" ]]; then
+            echo "tag=dev" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
 
       # Step 4: Build and tag the Docker image
       - name: Build Docker Image
         run: |
           IMAGE_NAME="${{ env.DOCKER_REGISTRY }}/${{ env.REPOSITORY }}"
-          if [[ "${{ github.ref_name }}" == "main" ]]; then
-            TAG="latest"
-          elif [[ "${{ github.ref_name }}" == "dev" ]]; then
-            TAG="dev"
-          else
-            TAG="${{ github.ref_name }}"
-          fi
-          docker build -t $IMAGE_NAME:$TAG .
+          docker build \
+            --cache-from $IMAGE_NAME:latest \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            -t $IMAGE_NAME:${{ steps.tag.outputs.tag }} .
 
       # Step 5: Push the Docker image to the registry
       - name: Push Docker Image
         run: |
           IMAGE_NAME="${{ env.DOCKER_REGISTRY }}/${{ env.REPOSITORY }}"
-          if [[ "${{ github.ref_name }}" == "main" ]]; then
-            TAG="latest"
-          elif [[ "${{ github.ref_name }}" == "dev" ]]; then
-            TAG="dev"
-          else
-            TAG="${{ github.ref_name }}"
-          fi
-          docker push $IMAGE_NAME:$TAG
+          docker push $IMAGE_NAME:${{ steps.tag.outputs.tag }}
 
 
