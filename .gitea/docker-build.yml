@@ -1,0 +1,62 @@
+name: Build and Publish Docker Image
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+env:
+  DOCKER_REGISTRY: git.imkumpy.in 
+  REPOSITORY: kumpy/discord-joinerbot
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # Step 2: Set up Docker
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v2
+
+      # Step 3: Log in to Gitea Docker registry
+      - name: Log in to Docker Registry
+        run: echo "${{ secrets.DOCKER_REGISTRY_PASSWORD }}" | docker login ${{ env.DOCKER_REGISTRY }} -u ${{ secrets.DOCKER_REGISTRY_USERNAME }} --password-stdin
+
+      - name: Debug Image Name
+        run: |
+          IMAGE_NAME="${{ env.DOCKER_REGISTRY }}/${{ env.REPOSITORY }}"
+          TAG="latest"
+          echo "Docker Image Name: $IMAGE_NAME:$TAG"
+
+      # Step 4: Build and tag the Docker image
+      - name: Build Docker Image
+        run: |
+          IMAGE_NAME="${{ env.DOCKER_REGISTRY }}/${{ env.REPOSITORY }}"
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            TAG="latest"
+          elif [[ "${{ github.ref_name }}" == "dev" ]]; then
+            TAG="dev"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          docker build -t $IMAGE_NAME:$TAG .
+
+      # Step 5: Push the Docker image to the registry
+      - name: Push Docker Image
+        run: |
+          IMAGE_NAME="${{ env.DOCKER_REGISTRY }}/${{ env.REPOSITORY }}"
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            TAG="latest"
+          elif [[ "${{ github.ref_name }}" == "dev" ]]; then
+            TAG="dev"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          docker push $IMAGE_NAME:$TAG
+
+
