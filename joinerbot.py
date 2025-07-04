@@ -44,7 +44,10 @@ class JoinerBot(discord.Client):
             # Not our channel
             return
 
-        if str(before.channel) == self.watched_channel:
+        if (
+            str(before.channel) == self.watched_channel
+            and str(after.channel) != self.watched_channel
+        ):
             self.logger.info(f"Action: {member.name} left {before.channel.name}")
             self.db.log_join_leave(member.id, member.display_name, "leave")
             self.db.del_caller(member.id)
@@ -54,7 +57,10 @@ class JoinerBot(discord.Client):
                 await Message.update(member_list, callers)
             else:
                 await Message.delete()
-        elif str(after.channel) == self.watched_channel:
+        elif (
+            str(after.channel) == self.watched_channel
+            and str(before.channel) != self.watched_channel
+        ):
             self.logger.info(f"Action: {member.name} joined {after.channel.name}")
             self.db.log_join_leave(member.id, member.display_name, "join")
             self.db.add_caller(member.id, member.display_name)
