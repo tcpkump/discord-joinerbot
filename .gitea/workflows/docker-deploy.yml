@@ -1,0 +1,29 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["Build Docker Image"]
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Deploy to Production
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: prod-mc.imkumpy.in
+          username: lab
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /srv/joinerbot
+            docker compose pull
+            # Zero-downtime deployment: only recreate changed containers
+            docker compose up -d
+            # Clean up unused images to save disk space
+            docker image prune -f
