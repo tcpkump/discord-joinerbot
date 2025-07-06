@@ -1,5 +1,8 @@
 postgres_data/
 postgres.log
+.envrc
+.env
+.direnv/
 
 # Python-generated files
 __pycache__/
