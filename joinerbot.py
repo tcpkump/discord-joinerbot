@@ -1,4 +1,5 @@
 import logging
+import os
 
 import discord
 
@@ -10,8 +11,8 @@ class JoinerBot(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.db = Database()
-        self.watched_channel = "general (hop in!)"
-        self.target_channel = "general-notifications"
+        self.watched_channel = os.environ.get("JOINERBOT_WATCHED_CHANNEL")
+        self.target_channel = os.environ.get("JOINERBOT_TARGET_CHANNEL")
         self.logger = logging.getLogger("joinerbot")
 
     async def on_ready(self):
@@ -48,6 +49,7 @@ class JoinerBot(discord.Client):
             str(before.channel) == self.watched_channel
             and str(after.channel) != self.watched_channel
         ):
+            # Member left
             self.logger.info(f"Action: {member.name} left {before.channel.name}")
             self.db.log_join_leave(member.id, member.display_name, "leave")
             self.db.del_caller(member.id)
@@ -61,6 +63,7 @@ class JoinerBot(discord.Client):
             str(after.channel) == self.watched_channel
             and str(before.channel) != self.watched_channel
         ):
+            # Member joined
             self.logger.info(f"Action: {member.name} joined {after.channel.name}")
             self.db.log_join_leave(member.id, member.display_name, "join")
             self.db.add_caller(member.id, member.display_name)

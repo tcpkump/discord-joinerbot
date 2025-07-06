@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import discord
 
@@ -14,7 +14,7 @@ class Message:
         cls._target_channel = channel
 
     @classmethod
-    async def create(cls, member_list: List[Tuple[int, str, any]], callers: int):
+    async def create(cls, member_list: List[Tuple[int, str, Any]], callers: int):
         if not cls._target_channel:
             cls._logger.warning("No target channel set for messages")
             return
@@ -37,7 +37,7 @@ class Message:
             cls._logger.error(f"Failed to send message: {e}")
 
     @classmethod
-    async def update(cls, member_list: List[Tuple[int, str, any]], callers: int):
+    async def update(cls, member_list: List[Tuple[int, str, Any]], callers: int):
         if not cls._target_channel or not cls._last_message:
             return
 
@@ -70,9 +70,9 @@ class Message:
 
     @classmethod
     def _format_message(
-        cls, member_list: List[Tuple[int, str, any]], callers: int
+        cls, member_list: List[Tuple[int, str, Any]], callers: int
     ) -> str:
-        usernames = [username for user_id, username, joined_at in member_list]
+        usernames = [username for _, username, _ in member_list]
 
         if callers == 1 and usernames:
             return f"{usernames[0]} joined voice chat"

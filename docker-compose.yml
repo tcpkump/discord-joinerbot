@@ -6,8 +6,11 @@ services:
     depends_on:
       - postgres
     environment:
+      - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql://joinerbot:password@postgres:5432/joinerbot
       - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - JOINERBOT_WATCHED_CHANNEL="general (hop in!)"
+      - JOINERBOT_TARGET_CHANNEL="general-notifications"
     restart: unless-stopped
     
   postgres:

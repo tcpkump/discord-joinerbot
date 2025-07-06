@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional
+from typing import List
 
 import psycopg
 
@@ -29,7 +29,7 @@ class Database:
                     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """
-            )
+            )  # user_id/username are separate because people like to change names :)
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS join_leave_history (

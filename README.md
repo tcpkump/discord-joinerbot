@@ -71,5 +71,8 @@ their friends are "online" and ready to chat/game.
 
 The bot requires these environment variables:
 - `DISCORD_TOKEN`: Your Discord bot token
+- `JOINERBOT_WATCHED_CHANNEL`: Voice channel for JoinerBot to watch
+- `JOINERBOT_TARGET_CHANNEL`: Text channel for JoinerBot to post in
+- `LOG_LEVEL`: Logging level (optional, defaults to INFO)
 - `DATABASE_URL`: PostgreSQL connection string (optional, defaults to localhost)
 

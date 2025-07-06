@@ -8,14 +8,20 @@ from joinerbot import JoinerBot
 
 
 def main():
+    # Load configuration from environment variables/.env file
+    _ = load_dotenv()
+
     # Configure logging
+    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, log_level),
         format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    # Load configuration from environment variables/.env file
-    _ = load_dotenv()
+    discord_log_level = getattr(logging, log_level)
+    logging.getLogger("discord.gateway").setLevel(discord_log_level)
+    logging.getLogger("discord.client").setLevel(discord_log_level)
+
     DISCORD_TOKEN = str(os.environ.get("DISCORD_TOKEN"))
 
     intents = discord.Intents.default()
