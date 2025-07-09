@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import time
 from typing import Any, List, Optional, Tuple
 
 import discord
@@ -8,33 +10,41 @@ class Message:
     _last_message: Optional[discord.Message] = None
     _target_channel: Optional[discord.TextChannel] = None
     _logger = logging.getLogger("joinerbot.message")
+    _last_message_time: Optional[float] = None
+    _queued_task: Optional[asyncio.Task] = None
+    _pending_update: bool = False
 
     @classmethod
     def set_channel(cls, channel: discord.TextChannel):
         cls._target_channel = channel
 
     @classmethod
-    async def create(cls, member_list: List[Tuple[int, str, Any]], callers: int):
+    async def create(
+        cls,
+        member_list: List[Tuple[int, str, Any]],
+        callers: int,
+        is_first_person: bool = False,
+    ):
         if not cls._target_channel:
             cls._logger.warning("No target channel set for messages")
             return
 
-        # Delete previous message if exists
-        if cls._last_message:
-            try:
-                await cls._last_message.delete()
-            except discord.NotFound:
-                pass
-            except discord.HTTPException:
-                pass
+        current_time = time.time()
 
-        message_content = cls._format_message(member_list, callers)
+        # If this is the first person joining, send immediately
+        if is_first_person or cls._last_message_time is None:
+            await cls._send_message_now(member_list, callers)
+            cls._last_message_time = current_time
+            return
 
-        try:
-            cls._last_message = await cls._target_channel.send(message_content)
-            cls._logger.info(f"Sent message: {message_content}")
-        except discord.HTTPException as e:
-            cls._logger.error(f"Failed to send message: {e}")
+        # Check if 10 minutes have passed since last message
+        time_since_last = current_time - cls._last_message_time
+        if time_since_last >= 600:  # 10 minutes = 600 seconds
+            await cls._send_message_now(member_list, callers)
+            cls._last_message_time = current_time
+        else:
+            # Queue message for later
+            await cls._queue_message(member_list, callers, current_time)
 
     @classmethod
     async def update(cls, member_list: List[Tuple[int, str, Any]], callers: int):
@@ -67,6 +77,60 @@ class Message:
                 cls._logger.error(f"Failed to delete message: {e}")
             finally:
                 cls._last_message = None
+
+    @classmethod
+    async def _send_message_now(
+        cls, member_list: List[Tuple[int, str, Any]], callers: int
+    ):
+        # Delete previous message if exists
+        if cls._last_message:
+            try:
+                await cls._last_message.delete()
+            except discord.NotFound:
+                pass
+            except discord.HTTPException:
+                pass
+
+        message_content = cls._format_message(member_list, callers)
+
+        try:
+            cls._last_message = await cls._target_channel.send(message_content)
+            cls._logger.info(f"Sent message: {message_content}")
+        except discord.HTTPException as e:
+            cls._logger.error(f"Failed to send message: {e}")
+
+    @classmethod
+    async def _queue_message(
+        cls, member_list: List[Tuple[int, str, Any]], callers: int, current_time: float
+    ):
+        # Cancel any existing queued task
+        if cls._queued_task and not cls._queued_task.done():
+            cls._queued_task.cancel()
+
+        # Calculate delay until 10 minutes after last message
+        delay = 600 - (current_time - cls._last_message_time)
+        cls._pending_update = True
+
+        cls._logger.info(f"Queuing message for {delay:.1f} seconds from now")
+
+        # Create new queued task
+        cls._queued_task = asyncio.create_task(
+            cls._delayed_send(member_list, callers, delay)
+        )
+
+    @classmethod
+    async def _delayed_send(
+        cls, member_list: List[Tuple[int, str, Any]], callers: int, delay: float
+    ):
+        try:
+            await asyncio.sleep(delay)
+            if cls._pending_update:  # Only send if we still have a pending update
+                await cls._send_message_now(member_list, callers)
+                cls._last_message_time = time.time()
+                cls._pending_update = False
+        except asyncio.CancelledError:
+            cls._logger.info("Queued message was cancelled")
+            raise
 
     @classmethod
     def _format_message(
