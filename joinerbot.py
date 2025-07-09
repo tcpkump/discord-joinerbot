@@ -69,4 +69,9 @@ class JoinerBot(discord.Client):
             self.db.add_caller(member.id, member.display_name)
             callers = self.db.get_num_callers()
             member_list = self.db.get_callers()
-            await Message.create(member_list, callers)
+            if callers > 1:
+                # Update existing message immediately and queue a new one for notifications
+                await Message.update(member_list, callers)
+                await Message.create(member_list, callers, is_first_person=False)
+            else:
+                await Message.create(member_list, callers, is_first_person=True)
