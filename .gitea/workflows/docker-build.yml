@@ -7,7 +7,7 @@ on:
       - dev
 
 env:
-  DOCKER_REGISTRY: git.imkumpy.in 
+  DOCKER_REGISTRY: git.imkumpy.in
   REPOSITORY: kumpy/discord-joinerbot
 
 jobs:

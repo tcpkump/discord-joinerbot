@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "tool_calls": [
+      {
+        "name": "basedpyright-check",
+        "command": "uv tool run basedpyright --no-color",
+        "triggers": ["Edit", "Write", "MultiEdit"]
+      },
+      {
+        "name": "run-tests",
+        "command": "uv run python -m unittest discover -s . -p \"test_*.py\" -v",
+        "triggers": ["Edit", "Write", "MultiEdit"]
+      }
+    ]
+  }
+}

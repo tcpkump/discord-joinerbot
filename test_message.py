@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -14,6 +15,19 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         Message._last_message_time = None
         Message._queued_task = None
         Message._pending_update = False
+        Message._batch_timer = None
+        Message._pending_joins = []
+
+    def tearDown(self):
+        """Clean up any running tasks after each test."""
+
+        async def cleanup():
+            if Message._batch_timer and not Message._batch_timer.done():
+                Message._batch_timer.cancel()
+            if Message._queued_task and not Message._queued_task.done():
+                Message._queued_task.cancel()
+
+        asyncio.run(cleanup())
 
     def test_format_message_single_user(self):
         """Test message formatting for single user."""
@@ -92,8 +106,8 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         )
 
     @patch("message.Message._logger")
-    async def test_create_with_channel(self, mock_logger):
-        """Test create method with target channel set."""
+    async def test_create_with_channel_starts_batch_timer(self, mock_logger):
+        """Test create method with target channel set now starts batch timer."""
         mock_channel = AsyncMock(spec=discord.TextChannel)
         mock_message = Mock(spec=discord.Message)
         mock_channel.send.return_value = mock_message
@@ -104,15 +118,15 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
 
         await Message.create(member_list, callers, is_first_person=True)
 
-        mock_channel.send.assert_called_once_with("Alice joined voice chat")
-        mock_logger.info.assert_called_once_with(
-            "Sent message: Alice joined voice chat"
-        )
-        self.assertEqual(Message._last_message, mock_message)
+        # Should not send immediately due to new batching logic
+        mock_channel.send.assert_not_called()
+        # Should start batch timer instead
+        self.assertIsNotNone(Message._batch_timer)
+        self.assertEqual(len(Message._pending_joins), 1)
 
     @patch("message.Message._logger")
-    async def test_create_deletes_previous_message(self, mock_logger):
-        """Test create method deletes previous message."""
+    async def test_send_message_now_deletes_previous_message(self, mock_logger):
+        """Test that _send_message_now deletes previous message."""
         mock_channel = AsyncMock(spec=discord.TextChannel)
         mock_old_message = AsyncMock(spec=discord.Message)
         mock_new_message = Mock(spec=discord.Message)
@@ -124,10 +138,13 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         member_list = [(123, "Alice", None)]
         callers = 1
 
-        await Message.create(member_list, callers, is_first_person=True)
+        await Message._send_message_now(member_list, callers)
 
         mock_old_message.delete.assert_called_once()
         mock_channel.send.assert_called_once_with("Alice joined voice chat")
+        mock_logger.info.assert_called_once_with(
+            "Sent message: Alice joined voice chat"
+        )
         self.assertEqual(Message._last_message, mock_new_message)
 
     @patch("message.Message._logger")
@@ -191,8 +208,8 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_logger.info.assert_not_called()
 
     @patch("message.Message._logger")
-    async def test_create_http_exception(self, mock_logger):
-        """Test create method handles HTTP exceptions."""
+    async def test_send_message_now_http_exception(self, mock_logger):
+        """Test _send_message_now method handles HTTP exceptions."""
         mock_channel = AsyncMock(spec=discord.TextChannel)
         # Create a mock response with the expected attributes
         mock_response = Mock()
@@ -206,7 +223,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         member_list = [(123, "Alice", None)]
         callers = 1
 
-        await Message.create(member_list, callers, is_first_person=True)
+        await Message._send_message_now(member_list, callers)
 
         # Check that error was called with a message containing "Failed to send message:"
         mock_logger.error.assert_called_once()
@@ -234,10 +251,10 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
     @patch("time.time")
     @patch("asyncio.sleep")
     @patch("message.Message._logger")
-    async def test_first_person_sends_immediately(
+    async def test_first_person_starts_batch_timer(
         self, mock_logger, mock_sleep, mock_time
     ):
-        """Test that first person joining sends message immediately."""
+        """Test that first person joining starts batch timer instead of sending immediately."""
         mock_time.return_value = 1000.0
         mock_channel = AsyncMock(spec=discord.TextChannel)
         mock_message = Mock(spec=discord.Message)
@@ -249,17 +266,18 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
 
         await Message.create(member_list, callers, is_first_person=True)
 
-        mock_channel.send.assert_called_once_with("Alice joined voice chat")
-        mock_sleep.assert_not_called()  # No queuing for first person
-        self.assertEqual(Message._last_message_time, 1000.0)
+        # Should not send immediately - should start batch timer
+        mock_channel.send.assert_not_called()
+        self.assertIsNotNone(Message._batch_timer)
+        self.assertEqual(len(Message._pending_joins), 1)
 
     @patch("time.time")
     @patch("asyncio.sleep")
     @patch("message.Message._logger")
-    async def test_immediate_send_when_10_minutes_passed(
+    async def test_batch_timer_when_10_minutes_passed(
         self, mock_logger, mock_sleep, mock_time
     ):
-        """Test immediate send when 10+ minutes have passed since last message."""
+        """Test batch timer starts when 10+ minutes have passed since last message."""
         mock_channel = AsyncMock(spec=discord.TextChannel)
         mock_message = Mock(spec=discord.Message)
         mock_channel.send.return_value = mock_message
@@ -273,9 +291,10 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
 
         await Message.create(member_list, callers, is_first_person=False)
 
-        mock_channel.send.assert_called_once_with("Alice and Bob are in voice chat")
-        mock_sleep.assert_not_called()  # No queuing when enough time has passed
-        self.assertEqual(Message._last_message_time, 1700.0)
+        # Should start batch timer, not send immediately
+        mock_channel.send.assert_not_called()
+        self.assertIsNotNone(Message._batch_timer)
+        self.assertEqual(len(Message._pending_joins), 1)  # Latest joiner
 
     @patch("time.time")
     @patch("asyncio.create_task")

@@ -4,6 +4,13 @@ A Discord bot for sending text channel notifications when people join a voice ch
 This is meant to help create inviting public spaces where people can be notified that
 their friends are "online" and ready to chat/game.
 
+## Features
+
+- **Smart Batching**: When the first user joins, waits 30 seconds to batch additional joins into a single notification
+- **Rejoin Suppression**: Users who disconnect have a 5-minute grace period to rejoin without triggering spam notifications
+- **Message Queuing**: Subsequent joins after initial batch are queued and sent every 10 minutes to prevent notification overload
+- **PostgreSQL Integration**: Tracks join/leave history and current voice channel participants
+
 ## Local Development Setup
 
 ### Option 1: Using Docker Compose (Recommended)
@@ -75,4 +82,3 @@ The bot requires these environment variables:
 - `JOINERBOT_TARGET_CHANNEL`: Text channel for JoinerBot to post in
 - `LOG_LEVEL`: Logging level (optional, defaults to INFO)
 - `DATABASE_URL`: PostgreSQL connection string (optional, defaults to localhost)
-

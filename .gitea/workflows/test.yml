@@ -16,19 +16,25 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-      
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.13'
-      
+
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-      
+
       - name: Install dependencies
         run: uv sync
-      
+
+      - name: Install basedpyright
+        run: uv tool install basedpyright
+
+      - name: Run type checking
+        run: uv tool run basedpyright
+
       - name: Run tests
-        run: uv run python -m unittest discover -s . -p "test_*.py"
+        run: uv run python -m unittest discover -s . -p "test_*.py" -v

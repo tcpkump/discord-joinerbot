@@ -12,7 +12,7 @@ services:
       - JOINERBOT_WATCHED_CHANNEL="general (hop in!)"
       - JOINERBOT_TARGET_CHANNEL="general-notifications"
     restart: unless-stopped
-    
+
   postgres:
     image: postgres:15-alpine
     environment:

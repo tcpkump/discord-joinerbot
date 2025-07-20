@@ -13,6 +13,8 @@ class Message:
     _last_message_time: Optional[float] = None
     _queued_task: Optional[asyncio.Task] = None
     _pending_update: bool = False
+    _batch_timer: Optional[asyncio.Task] = None
+    _pending_joins: List[Tuple[int, str, Any]] = []
 
     @classmethod
     def set_channel(cls, channel: discord.TextChannel):
@@ -24,6 +26,7 @@ class Message:
         member_list: List[Tuple[int, str, Any]],
         callers: int,
         is_first_person: bool = False,
+        suppress_notification: bool = False,
     ):
         if not cls._target_channel:
             cls._logger.warning("No target channel set for messages")
@@ -31,20 +34,38 @@ class Message:
 
         current_time = time.time()
 
-        # If this is the first person joining, send immediately
-        if is_first_person or cls._last_message_time is None:
-            await cls._send_message_now(member_list, callers)
-            cls._last_message_time = current_time
+        # Handle suppressed notifications (rejoins)
+        if suppress_notification:
+            cls._logger.info("Suppressing notification for recent rejoin")
+            # Still update the message but don't send new notifications
+            if cls._last_message:
+                await cls.update(member_list, callers)
             return
 
-        # Check if 10 minutes have passed since last message
-        time_since_last = current_time - cls._last_message_time
-        if time_since_last >= 600:  # 10 minutes = 600 seconds
-            await cls._send_message_now(member_list, callers)
-            cls._last_message_time = current_time
+        # If this is the first person or 10+ minutes have passed, start 30-second batch timer
+        if (
+            is_first_person
+            or cls._last_message_time is None
+            or (current_time - cls._last_message_time) >= 600
+        ):
+            # Add new joiner to pending list
+            new_joiner = member_list[-1]  # Latest joiner
+            cls._pending_joins.append(new_joiner)
+
+            # If no batch timer running, start one
+            if not cls._batch_timer or cls._batch_timer.done():
+                cls._batch_timer = asyncio.create_task(
+                    cls._send_batched_notification(30)
+                )
+        elif (current_time - cls._last_message_time) < 600:
+            # Within 10-minute window - queue for later (only new members)
+            new_joiner = member_list[-1]  # Latest joiner
+            await cls._queue_message([new_joiner], 1, current_time)
         else:
-            # Queue message for later
-            await cls._queue_message(member_list, callers, current_time)
+            # If batch timer is running (someone joined within 30 seconds), add to batch
+            if cls._batch_timer and not cls._batch_timer.done():
+                new_joiner = member_list[-1]  # Latest joiner
+                cls._pending_joins.append(new_joiner)
 
     @classmethod
     async def update(cls, member_list: List[Tuple[int, str, Any]], callers: int):
@@ -78,6 +99,11 @@ class Message:
             finally:
                 cls._last_message = None
 
+        # Clear pending joins when everyone leaves
+        cls._pending_joins.clear()
+        if cls._batch_timer and not cls._batch_timer.done():
+            cls._batch_timer.cancel()
+
     @classmethod
     async def _send_message_now(
         cls, member_list: List[Tuple[int, str, Any]], callers: int
@@ -92,6 +118,10 @@ class Message:
                 pass
 
         message_content = cls._format_message(member_list, callers)
+
+        if cls._target_channel is None:
+            cls._logger.error("Target channel not set")
+            return
 
         try:
             cls._last_message = await cls._target_channel.send(message_content)
@@ -108,6 +138,9 @@ class Message:
             cls._queued_task.cancel()
 
         # Calculate delay until 10 minutes after last message
+        if cls._last_message_time is None:
+            cls._logger.error("Last message time not set")
+            return
         delay = 600 - (current_time - cls._last_message_time)
         cls._pending_update = True
 
@@ -124,12 +157,30 @@ class Message:
     ):
         try:
             await asyncio.sleep(delay)
-            if cls._pending_update:  # Only send if we still have a pending update
+            if cls._pending_update and member_list:  # Only send if we have new members
                 await cls._send_message_now(member_list, callers)
                 cls._last_message_time = time.time()
                 cls._pending_update = False
         except asyncio.CancelledError:
             cls._logger.info("Queued message was cancelled")
+            raise
+
+    @classmethod
+    async def _send_batched_notification(cls, delay: float):
+        """Send notification after batch delay"""
+        try:
+            await asyncio.sleep(delay)
+            if cls._pending_joins:
+                # Remove duplicates while preserving order
+                unique_joins = list(
+                    {member[0]: member for member in cls._pending_joins}.values()
+                )
+                member_count = len(unique_joins)
+                await cls._send_message_now(unique_joins, member_count)
+                cls._last_message_time = time.time()
+                cls._pending_joins.clear()
+        except asyncio.CancelledError:
+            cls._logger.info("Batch notification was cancelled")
             raise
 
     @classmethod

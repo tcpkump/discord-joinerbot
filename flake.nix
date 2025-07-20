@@ -19,6 +19,10 @@
           packages = [
             pkgs.uv
             pkgs.postgresql
+            pkgs.basedpyright
+            pkgs.ruff
+            pkgs.python3Packages.isort
+            pkgs.pre-commit
           ];
         };
       }

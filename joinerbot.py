@@ -65,13 +65,30 @@ class JoinerBot(discord.Client):
         ):
             # Member joined
             self.logger.info(f"Action: {member.name} joined {after.channel.name}")
+
+            # Check if this is a recent rejoin (within 5 minutes)
+            is_recent_rejoin = self.db.was_recently_connected(member.id, 5)
+
             self.db.log_join_leave(member.id, member.display_name, "join")
             self.db.add_caller(member.id, member.display_name)
             callers = self.db.get_num_callers()
             member_list = self.db.get_callers()
+
             if callers > 1:
-                # Update existing message immediately and queue a new one for notifications
+                # Update existing message immediately
                 await Message.update(member_list, callers)
-                await Message.create(member_list, callers, is_first_person=False)
+                # Send notification for new joiner (suppress if recent rejoin)
+                await Message.create(
+                    member_list,
+                    callers,
+                    is_first_person=False,
+                    suppress_notification=is_recent_rejoin,
+                )
             else:
-                await Message.create(member_list, callers, is_first_person=True)
+                # First person joining
+                await Message.create(
+                    member_list,
+                    callers,
+                    is_first_person=True,
+                    suppress_notification=is_recent_rejoin,
+                )
