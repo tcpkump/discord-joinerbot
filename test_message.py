@@ -432,6 +432,47 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         # Should not send new message
         mock_channel.send.assert_not_called()
 
+    @patch("database.Database")
+    @patch("message.Message._logger")
+    async def test_batched_notification_shows_all_current_users(
+        self, mock_logger, mock_db_class
+    ):
+        """Test that batched notification shows ALL current users, not just batch participants"""
+        # Mock the database
+        mock_db = Mock()
+        mock_db_class.return_value = mock_db
+        mock_db.get_callers.return_value = [
+            (123, "Alice", None),
+            (456, "Bob", None),
+            (789, "Charlie", None),  # Charlie was already in channel
+        ]
+        mock_db.get_num_callers.return_value = 3
+
+        mock_channel = AsyncMock(spec=discord.TextChannel)
+        mock_message = Mock(spec=discord.Message)
+        mock_channel.send.return_value = mock_message
+        Message.set_channel(mock_channel)
+
+        # Simulate Alice and Bob joining during batch (Charlie already there)
+        Message._pending_joins = [(123, "Alice", None), (456, "Bob", None)]
+
+        # Trigger batch send
+        await Message._send_batched_notification(0.01)
+
+        # Should call database to get ALL current users
+        mock_db.get_callers.assert_called_once()
+        mock_db.get_num_callers.assert_called_once()
+
+        # Should send message showing all 3 users
+        mock_channel.send.assert_called_once()
+        sent_message = mock_channel.send.call_args[0][0]
+
+        # Message should include all three users
+        self.assertIn("Alice", sent_message)
+        self.assertIn("Bob", sent_message)
+        self.assertIn("Charlie", sent_message)
+        self.assertIn("are in voice chat", sent_message)
+
 
 if __name__ == "__main__":
     unittest.main()

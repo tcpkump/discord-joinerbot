@@ -171,12 +171,13 @@ class Message:
         try:
             await asyncio.sleep(delay)
             if cls._pending_joins:
-                # Remove duplicates while preserving order
-                unique_joins = list(
-                    {member[0]: member for member in cls._pending_joins}.values()
-                )
-                member_count = len(unique_joins)
-                await cls._send_message_now(unique_joins, member_count)
+                # Get current member list from database to show all current members
+                from database import Database
+
+                db = Database()
+                member_list = db.get_callers()
+                member_count = db.get_num_callers()
+                await cls._send_message_now(member_list, member_count)
                 cls._last_message_time = time.time()
                 cls._pending_joins.clear()
         except asyncio.CancelledError:
