@@ -106,6 +106,22 @@ class Database:
             print(f"Error logging {action} event: {e}")
             return False
 
+    def was_recently_connected(self, user_id: int, minutes: int = 5) -> bool:
+        """Check if user was connected within the last X minutes"""
+        conn = self._get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM join_leave_history
+                WHERE user_id = %s
+                AND action = 'join'
+                AND timestamp > NOW() - INTERVAL '%s minutes'
+                """,
+                (user_id, minutes),
+            )
+            result = cur.fetchone()
+            return (result[0] if result else 0) > 0
+
     def close(self):
         if self._connection and not self._connection.closed:
             self._connection.close()

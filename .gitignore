@@ -4,6 +4,9 @@ postgres.log
 .env
 .direnv/
 
+!CLAUDE.md
+!.claude-hooks.json
+
 # Python-generated files
 __pycache__/
 *.py[oc]
