@@ -12,22 +12,18 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         """Reset Message class state before each test."""
-        Message._last_message = None
+        Message._state.reset()
         Message._target_channel = None
-        Message._last_message_time = None
-        Message._queued_task = None
-        Message._pending_update = False
-        Message._batch_timer = None
-        Message._pending_joins = []
+        Message._state.batch_delay = 30.0  # Reset to default
 
     def tearDown(self):
         """Clean up any running tasks after each test."""
 
         async def cleanup():
-            if Message._batch_timer and not Message._batch_timer.done():
-                Message._batch_timer.cancel()
-            if Message._queued_task and not Message._queued_task.done():
-                Message._queued_task.cancel()
+            if Message._state.batch_timer and not Message._state.batch_timer.done():
+                Message._state.batch_timer.cancel()
+            if Message._state.queued_task and not Message._state.queued_task.done():
+                Message._state.queued_task.cancel()
 
         asyncio.run(cleanup())
 
@@ -41,11 +37,11 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
         await Message.create(member_list, 1, is_first_person=True)
 
         # Should start batch timer, not send immediately
-        self.assertIsNotNone(Message._batch_timer)
-        if Message._batch_timer is not None:
-            self.assertFalse(Message._batch_timer.done())
-        self.assertEqual(len(Message._pending_joins), 1)
-        self.assertEqual(Message._pending_joins[0][1], "Alice")
+        self.assertIsNotNone(Message._state.batch_timer)
+        if Message._state.batch_timer is not None:
+            self.assertFalse(Message._state.batch_timer.done())
+        self.assertEqual(len(Message._state.pending_joins), 1)
+        self.assertEqual(Message._state.pending_joins[0][1], "Alice")
         mock_channel.send.assert_not_called()
 
     @patch("message.Message._logger")
@@ -63,8 +59,8 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
         await Message.create(member_list2, 2, is_first_person=False)
 
         # Should have 2 people in pending joins
-        self.assertEqual(len(Message._pending_joins), 2)
-        usernames = [member[1] for member in Message._pending_joins]
+        self.assertEqual(len(Message._state.pending_joins), 2)
+        usernames = [member[1] for member in Message._state.pending_joins]
         self.assertIn("Alice", usernames)
         self.assertIn("Bob", usernames)
         mock_channel.send.assert_not_called()
@@ -87,8 +83,10 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
         mock_channel.send.return_value = mock_new_message
 
         Message.set_channel(mock_channel)
-        Message._last_message = mock_old_message
-        Message._pending_joins = [(123, "Alice", None)]
+        Message._state.last_message = mock_old_message
+        Message._state.pending_joins = [(123, "Alice", None)]
+        Message._state.batch_member_list = [(123, "Alice", None)]
+        Message._state.batch_callers_count = 1
 
         # Trigger batch send with very short delay
         await Message._send_batched_notification(0.01)
@@ -96,7 +94,7 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
         # Should delete old message and send new one
         mock_old_message.delete.assert_called_once()
         mock_channel.send.assert_called_once()
-        self.assertEqual(Message._last_message, mock_new_message)
+        self.assertEqual(Message._state.last_message, mock_new_message)
 
     @patch("message.Message._logger")
     async def test_suppressed_notification_updates_existing_message(self, mock_logger):
@@ -105,7 +103,7 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
         mock_existing_message = AsyncMock(spec=discord.Message)
 
         Message.set_channel(mock_channel)
-        Message._last_message = mock_existing_message
+        Message._state.last_message = mock_existing_message
         member_list = [(123, "Alice", None)]
 
         await Message.create(
@@ -117,8 +115,8 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
             content="Alice joined voice chat"
         )
         mock_channel.send.assert_not_called()
-        self.assertIsNone(Message._batch_timer)
-        self.assertEqual(len(Message._pending_joins), 0)
+        self.assertIsNone(Message._state.batch_timer)
+        self.assertEqual(len(Message._state.pending_joins), 0)
 
     @patch("time.time")
     @patch("message.Message._logger")
@@ -128,15 +126,15 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
         Message.set_channel(mock_channel)
 
         # Set last message time to 11 minutes ago
-        Message._last_message_time = 1000.0
+        Message._state.last_message_time = 1000.0
         mock_time.return_value = 1660.0  # 660 seconds later (11 minutes)
 
         member_list = [(123, "Alice", None)]
         await Message.create(member_list, 1, is_first_person=False)
 
         # Should start new batch timer since >10 minutes passed
-        self.assertIsNotNone(Message._batch_timer)
-        self.assertEqual(len(Message._pending_joins), 1)
+        self.assertIsNotNone(Message._state.batch_timer)
+        self.assertEqual(len(Message._state.pending_joins), 1)
 
     @patch("database.Database")
     @patch("message.Message._logger")
@@ -159,12 +157,19 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
         Message.set_channel(mock_channel)
 
         # Add same user multiple times to pending joins
-        Message._pending_joins = [
+        Message._state.pending_joins = [
             (123, "Alice", None),
             (456, "Bob", None),
             (123, "Alice", None),  # Duplicate
             (789, "Charlie", None),
         ]
+        # Set up batch member list (this is what matters now)
+        Message._state.batch_member_list = [
+            (123, "Alice", None),
+            (456, "Bob", None),
+            (789, "Charlie", None),
+        ]
+        Message._state.batch_callers_count = 3
 
         # Trigger batch send
         await Message._send_batched_notification(0.01)
@@ -177,7 +182,7 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Alice", call_args)
         self.assertIn("Bob", call_args)
         self.assertIn("Charlie", call_args)
-        self.assertEqual(len(Message._pending_joins), 0)  # Should be cleared
+        self.assertEqual(len(Message._state.pending_joins), 0)  # Should be cleared
 
     @patch("time.time")
     @patch("asyncio.create_task")
@@ -191,7 +196,7 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
         mock_create_task.return_value = mock_task
 
         Message.set_channel(mock_channel)
-        Message._last_message_time = 1000.0  # Set previous message time
+        Message._state.last_message_time = 1000.0  # Set previous message time
         mock_time.return_value = 1300.0  # 300 seconds later (<10 minutes)
 
         member_list = [(123, "Alice", None), (456, "Bob", None)]
@@ -199,9 +204,9 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
         await Message.create(member_list, 2, is_first_person=False)
 
         # Should not start batch timer, should queue instead
-        self.assertIsNone(Message._batch_timer)
+        self.assertIsNone(Message._state.batch_timer)
         mock_create_task.assert_called_once()
-        self.assertTrue(Message._pending_update)
+        self.assertTrue(Message._state.pending_update)
 
     @patch("message.Message._logger")
     async def test_delete_cancels_batch_timer(self, mock_logger):
@@ -210,21 +215,21 @@ class TestBatchingAndRejoinLogic(unittest.IsolatedAsyncioTestCase):
         mock_batch_timer = Mock()
         mock_batch_timer.done.return_value = False
 
-        Message._last_message = mock_message
-        Message._batch_timer = mock_batch_timer
-        Message._pending_joins = [(123, "Alice", None)]
+        Message._state.last_message = mock_message
+        Message._state.batch_timer = mock_batch_timer
+        Message._state.pending_joins = [(123, "Alice", None)]
 
         await Message.delete()
 
         # Should cancel timer and clear state
         mock_batch_timer.cancel.assert_called_once()
-        self.assertEqual(len(Message._pending_joins), 0)
-        self.assertIsNone(Message._last_message)
+        self.assertEqual(len(Message._state.pending_joins), 0)
+        self.assertIsNone(Message._state.last_message)
 
     @patch("message.Message._logger")
     async def test_batch_timer_cancelled_gracefully(self, mock_logger):
         """Test that batch timer handles cancellation gracefully"""
-        Message._pending_joins = [(123, "Alice", None)]
+        Message._state.pending_joins = [(123, "Alice", None)]
 
         # Create a task that will be cancelled
         task = asyncio.create_task(Message._send_batched_notification(1.0))

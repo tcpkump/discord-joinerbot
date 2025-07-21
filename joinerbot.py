@@ -38,57 +38,64 @@ class JoinerBot(discord.Client):
     async def on_voice_state_update(self, member, before, after):
         await self.wait_until_ready()
 
-        if (
-            str(before.channel) != self.watched_channel
-            and str(after.channel) != self.watched_channel
-        ):
-            # Not our channel
+        action = self._get_voice_action(before, after)
+        if not action:
             return
 
-        if (
-            str(before.channel) == self.watched_channel
-            and str(after.channel) != self.watched_channel
-        ):
-            # Member left
-            self.logger.info(f"Action: {member.name} left {before.channel.name}")
-            self.db.log_join_leave(member.id, member.display_name, "leave")
-            self.db.del_caller(member.id)
-            callers = self.db.get_num_callers()
-            if callers != 0:
-                member_list = self.db.get_callers()
-                await Message.update(member_list, callers)
-            else:
-                await Message.delete()
-        elif (
-            str(after.channel) == self.watched_channel
-            and str(before.channel) != self.watched_channel
-        ):
-            # Member joined
-            self.logger.info(f"Action: {member.name} joined {after.channel.name}")
+        if action == "leave":
+            await self._handle_leave(member, before)
+        else:  # join
+            await self._handle_join(member, after)
 
-            # Check if this is a recent rejoin (within 5 minutes)
-            is_recent_rejoin = self.db.was_recently_connected(member.id, 5)
+    def _get_voice_action(self, before, after):
+        """Determine what voice action occurred"""
+        before_watched = str(before.channel) == self.watched_channel
+        after_watched = str(after.channel) == self.watched_channel
 
-            self.db.log_join_leave(member.id, member.display_name, "join")
-            self.db.add_caller(member.id, member.display_name)
-            callers = self.db.get_num_callers()
+        if not before_watched and not after_watched:
+            return None  # Not our channel
+        elif before_watched and not after_watched:
+            return "leave"
+        elif after_watched and not before_watched:
+            return "join"
+        return None
+
+    async def _handle_leave(self, member, before):
+        """Handle member leaving the watched channel"""
+        self.logger.info(f"Action: {member.name} left {before.channel.name}")
+        self.db.log_join_leave(member.id, member.display_name, "leave")
+        self.db.del_caller(member.id)
+
+        callers = self.db.get_num_callers()
+        if callers > 0:
             member_list = self.db.get_callers()
+            await Message.update(member_list, callers)
+        else:
+            await Message.delete()
 
-            if callers > 1:
-                # Update existing message immediately
-                await Message.update(member_list, callers)
-                # Send notification for new joiner (suppress if recent rejoin)
-                await Message.create(
-                    member_list,
-                    callers,
-                    is_first_person=False,
-                    suppress_notification=is_recent_rejoin,
-                )
-            else:
-                # First person joining
-                await Message.create(
-                    member_list,
-                    callers,
-                    is_first_person=True,
-                    suppress_notification=is_recent_rejoin,
-                )
+    async def _handle_join(self, member, after):
+        """Handle member joining the watched channel"""
+        self.logger.info(f"Action: {member.name} joined {after.channel.name}")
+
+        # Check if this is a recent rejoin (within 5 minutes)
+        is_recent_rejoin = self.db.was_recently_connected(member.id, 5)
+
+        self.db.log_join_leave(member.id, member.display_name, "join")
+        self.db.add_caller(member.id, member.display_name)
+
+        # Get current state
+        callers = self.db.get_num_callers()
+        member_list = self.db.get_callers()
+        is_first_person = callers == 1
+
+        # Always update existing message first if not first person
+        if not is_first_person:
+            await Message.update(member_list, callers)
+
+        # Send notification (batched or queued)
+        await Message.create(
+            member_list,
+            callers,
+            is_first_person=is_first_person,
+            suppress_notification=is_recent_rejoin,
+        )

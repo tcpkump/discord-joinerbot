@@ -6,19 +6,42 @@ from typing import Any, List, Optional, Tuple
 import discord
 
 
+class MessageState:
+    def __init__(self):
+        self.last_message: Optional[discord.Message] = None
+        self.last_message_time: Optional[float] = None
+        self.queued_task: Optional[asyncio.Task] = None
+        self.pending_update: bool = False
+        self.batch_timer: Optional[asyncio.Task] = None
+        self.pending_joins: List[Tuple[int, str, Any]] = []
+        self.batch_member_list: Optional[List[Tuple[int, str, Any]]] = None
+        self.batch_callers_count: Optional[int] = None
+        self.batch_delay: float = 30.0
+
+    def reset(self):
+        self.last_message = None
+        self.last_message_time = None
+        self.queued_task = None
+        self.pending_update = False
+        self.batch_timer = None
+        self.pending_joins = []
+        self.batch_member_list = None
+        self.batch_callers_count = None
+
+
 class Message:
-    _last_message: Optional[discord.Message] = None
+    _state = MessageState()
     _target_channel: Optional[discord.TextChannel] = None
     _logger = logging.getLogger("joinerbot.message")
-    _last_message_time: Optional[float] = None
-    _queued_task: Optional[asyncio.Task] = None
-    _pending_update: bool = False
-    _batch_timer: Optional[asyncio.Task] = None
-    _pending_joins: List[Tuple[int, str, Any]] = []
 
     @classmethod
     def set_channel(cls, channel: discord.TextChannel):
         cls._target_channel = channel
+
+    @classmethod
+    def set_batch_delay(cls, delay: float):
+        """Set the batch delay for testing purposes"""
+        cls._state.batch_delay = delay
 
     @classmethod
     async def create(
@@ -37,39 +60,22 @@ class Message:
         # Handle suppressed notifications (rejoins)
         if suppress_notification:
             cls._logger.info("Suppressing notification for recent rejoin")
-            # Still update the message but don't send new notifications
-            if cls._last_message:
+            if cls._state.last_message:
                 await cls.update(member_list, callers)
             return
 
-        # If this is the first person or 10+ minutes have passed, start 30-second batch timer
-        if (
-            is_first_person
-            or cls._last_message_time is None
-            or (current_time - cls._last_message_time) >= 600
-        ):
-            # Add new joiner to pending list
-            new_joiner = member_list[-1]  # Latest joiner
-            cls._pending_joins.append(new_joiner)
+        new_joiner = member_list[-1] if member_list else None
 
-            # If no batch timer running, start one
-            if not cls._batch_timer or cls._batch_timer.done():
-                cls._batch_timer = asyncio.create_task(
-                    cls._send_batched_notification(30)
-                )
-        elif (current_time - cls._last_message_time) < 600:
-            # Within 10-minute window - queue for later (only new members)
-            new_joiner = member_list[-1]  # Latest joiner
+        if cls._should_start_batch(is_first_person, current_time):
+            await cls._start_batch(new_joiner, member_list, callers)
+        elif cls._should_queue(current_time):
             await cls._queue_message([new_joiner], 1, current_time)
-        else:
-            # If batch timer is running (someone joined within 30 seconds), add to batch
-            if cls._batch_timer and not cls._batch_timer.done():
-                new_joiner = member_list[-1]  # Latest joiner
-                cls._pending_joins.append(new_joiner)
+        elif cls._is_batch_active():
+            await cls._add_to_batch(new_joiner, member_list, callers)
 
     @classmethod
     async def update(cls, member_list: List[Tuple[int, str, Any]], callers: int):
-        if not cls._target_channel or not cls._last_message:
+        if not cls._target_channel or not cls._state.last_message:
             return
 
         if callers == 0:
@@ -79,39 +85,41 @@ class Message:
         message_content = cls._format_message(member_list, callers)
 
         try:
-            await cls._last_message.edit(content=message_content)
+            await cls._state.last_message.edit(content=message_content)
             cls._logger.info(f"Updated message: {message_content}")
         except discord.NotFound:
-            cls._last_message = None
+            cls._state.last_message = None
         except discord.HTTPException as e:
             cls._logger.error(f"Failed to update message: {e}")
 
     @classmethod
     async def delete(cls):
-        if cls._last_message:
+        if cls._state.last_message:
             try:
-                await cls._last_message.delete()
+                await cls._state.last_message.delete()
                 cls._logger.info("Deleted voice chat message")
             except discord.NotFound:
                 pass
             except discord.HTTPException as e:
                 cls._logger.error(f"Failed to delete message: {e}")
             finally:
-                cls._last_message = None
+                cls._state.last_message = None
 
-        # Clear pending joins when everyone leaves
-        cls._pending_joins.clear()
-        if cls._batch_timer and not cls._batch_timer.done():
-            cls._batch_timer.cancel()
+        # Clear all state when everyone leaves
+        cls._state.pending_joins.clear()
+        cls._state.batch_member_list = None
+        cls._state.batch_callers_count = None
+        if cls._state.batch_timer and not cls._state.batch_timer.done():
+            cls._state.batch_timer.cancel()
 
     @classmethod
     async def _send_message_now(
         cls, member_list: List[Tuple[int, str, Any]], callers: int
     ):
         # Delete previous message if exists
-        if cls._last_message:
+        if cls._state.last_message:
             try:
-                await cls._last_message.delete()
+                await cls._state.last_message.delete()
             except discord.NotFound:
                 pass
             except discord.HTTPException:
@@ -124,7 +132,7 @@ class Message:
             return
 
         try:
-            cls._last_message = await cls._target_channel.send(message_content)
+            cls._state.last_message = await cls._target_channel.send(message_content)
             cls._logger.info(f"Sent message: {message_content}")
         except discord.HTTPException as e:
             cls._logger.error(f"Failed to send message: {e}")
@@ -134,20 +142,20 @@ class Message:
         cls, member_list: List[Tuple[int, str, Any]], callers: int, current_time: float
     ):
         # Cancel any existing queued task
-        if cls._queued_task and not cls._queued_task.done():
-            cls._queued_task.cancel()
+        if cls._state.queued_task and not cls._state.queued_task.done():
+            cls._state.queued_task.cancel()
 
         # Calculate delay until 10 minutes after last message
-        if cls._last_message_time is None:
+        if cls._state.last_message_time is None:
             cls._logger.error("Last message time not set")
             return
-        delay = 600 - (current_time - cls._last_message_time)
-        cls._pending_update = True
+        delay = 600 - (current_time - cls._state.last_message_time)
+        cls._state.pending_update = True
 
         cls._logger.info(f"Queuing message for {delay:.1f} seconds from now")
 
         # Create new queued task
-        cls._queued_task = asyncio.create_task(
+        cls._state.queued_task = asyncio.create_task(
             cls._delayed_send(member_list, callers, delay)
         )
 
@@ -157,10 +165,10 @@ class Message:
     ):
         try:
             await asyncio.sleep(delay)
-            if cls._pending_update and member_list:  # Only send if we have new members
+            if cls._state.pending_update and member_list:
                 await cls._send_message_now(member_list, callers)
-                cls._last_message_time = time.time()
-                cls._pending_update = False
+                cls._state.last_message_time = time.time()
+                cls._state.pending_update = False
         except asyncio.CancelledError:
             cls._logger.info("Queued message was cancelled")
             raise
@@ -170,16 +178,14 @@ class Message:
         """Send notification after batch delay"""
         try:
             await asyncio.sleep(delay)
-            if cls._pending_joins:
-                # Get current member list from database to show all current members
-                from database import Database
-
-                db = Database()
-                member_list = db.get_callers()
-                member_count = db.get_num_callers()
-                await cls._send_message_now(member_list, member_count)
-                cls._last_message_time = time.time()
-                cls._pending_joins.clear()
+            if cls._state.pending_joins and cls._state.batch_member_list is not None:
+                await cls._send_message_now(
+                    cls._state.batch_member_list, cls._state.batch_callers_count or 0
+                )
+                cls._state.last_message_time = time.time()
+                cls._state.pending_joins.clear()
+                cls._state.batch_member_list = None
+                cls._state.batch_callers_count = None
         except asyncio.CancelledError:
             cls._logger.info("Batch notification was cancelled")
             raise
@@ -190,17 +196,73 @@ class Message:
     ) -> str:
         usernames = [username for _, username, _ in member_list]
 
-        if callers == 1 and usernames:
+        if not usernames:
+            return f"{callers} people are in voice chat"
+
+        if callers == 1:
             return f"{usernames[0]} joined voice chat"
-        elif 2 <= callers <= 4 and usernames:
-            if len(usernames) == 2:
-                return f"{usernames[0]} and {usernames[1]} are in voice chat"
-            elif len(usernames) == 3:
+        elif callers == 2:
+            return f"{usernames[0]} and {usernames[1]} are in voice chat"
+        elif callers in (3, 4):
+            # Join all names with commas, "and" before last
+            if callers == 3:
                 return f"{usernames[0]}, {usernames[1]}, and {usernames[2]} are in voice chat"
-            elif len(usernames) == 4:
+            else:  # callers == 4
                 return f"{usernames[0]}, {usernames[1]}, {usernames[2]}, and {usernames[3]} are in voice chat"
-        elif callers >= 5 and usernames:
+        else:  # callers >= 5
             others_count = callers - 3
             return f"{usernames[0]}, {usernames[1]}, {usernames[2]}, and {others_count} others are in voice chat"
 
-        return f"{callers} people are in voice chat"
+    @classmethod
+    def _should_start_batch(cls, is_first_person: bool, current_time: float) -> bool:
+        """Determine if we should start a new batch timer"""
+        return (
+            is_first_person
+            or cls._state.last_message_time is None
+            or (current_time - cls._state.last_message_time) >= 600
+        )
+
+    @classmethod
+    def _should_queue(cls, current_time: float) -> bool:
+        """Determine if we should queue the message for later"""
+        return (
+            cls._state.last_message_time is not None
+            and (current_time - cls._state.last_message_time) < 600
+        )
+
+    @classmethod
+    def _is_batch_active(cls) -> bool:
+        """Check if batch timer is currently active"""
+        return cls._state.batch_timer and not cls._state.batch_timer.done()
+
+    @classmethod
+    async def _start_batch(
+        cls,
+        new_joiner: Optional[Tuple[int, str, Any]],
+        member_list: List[Tuple[int, str, Any]],
+        callers: int,
+    ):
+        """Start a new batch timer and add the joiner"""
+        if new_joiner:
+            cls._state.pending_joins.append(new_joiner)
+
+        if not cls._is_batch_active():
+            cls._state.batch_timer = asyncio.create_task(
+                cls._send_batched_notification(cls._state.batch_delay)
+            )
+
+        cls._state.batch_member_list = member_list.copy()
+        cls._state.batch_callers_count = callers
+
+    @classmethod
+    async def _add_to_batch(
+        cls,
+        new_joiner: Optional[Tuple[int, str, Any]],
+        member_list: List[Tuple[int, str, Any]],
+        callers: int,
+    ):
+        """Add a new joiner to existing batch"""
+        if new_joiner:
+            cls._state.pending_joins.append(new_joiner)
+        cls._state.batch_member_list = member_list.copy()
+        cls._state.batch_callers_count = callers

@@ -10,22 +10,18 @@ from message import Message
 class TestMessage(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         """Reset Message class state before each test."""
-        Message._last_message = None
+        Message._state.reset()
         Message._target_channel = None
-        Message._last_message_time = None
-        Message._queued_task = None
-        Message._pending_update = False
-        Message._batch_timer = None
-        Message._pending_joins = []
+        Message._state.batch_delay = 30.0  # Reset to default
 
     def tearDown(self):
         """Clean up any running tasks after each test."""
 
         async def cleanup():
-            if Message._batch_timer and not Message._batch_timer.done():
-                Message._batch_timer.cancel()
-            if Message._queued_task and not Message._queued_task.done():
-                Message._queued_task.cancel()
+            if Message._state.batch_timer and not Message._state.batch_timer.done():
+                Message._state.batch_timer.cancel()
+            if Message._state.queued_task and not Message._state.queued_task.done():
+                Message._state.queued_task.cancel()
 
         asyncio.run(cleanup())
 
@@ -121,8 +117,8 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         # Should not send immediately due to new batching logic
         mock_channel.send.assert_not_called()
         # Should start batch timer instead
-        self.assertIsNotNone(Message._batch_timer)
-        self.assertEqual(len(Message._pending_joins), 1)
+        self.assertIsNotNone(Message._state.batch_timer)
+        self.assertEqual(len(Message._state.pending_joins), 1)
 
     @patch("message.Message._logger")
     async def test_send_message_now_deletes_previous_message(self, mock_logger):
@@ -133,7 +129,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_channel.send.return_value = mock_new_message
 
         Message.set_channel(mock_channel)
-        Message._last_message = mock_old_message
+        Message._state.last_message = mock_old_message
 
         member_list = [(123, "Alice", None)]
         callers = 1
@@ -145,7 +141,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_logger.info.assert_called_once_with(
             "Sent message: Alice joined voice chat"
         )
-        self.assertEqual(Message._last_message, mock_new_message)
+        self.assertEqual(Message._state.last_message, mock_new_message)
 
     @patch("message.Message._logger")
     async def test_update_zero_callers(self, mock_logger):
@@ -154,7 +150,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_message = AsyncMock(spec=discord.Message)
 
         Message.set_channel(mock_channel)
-        Message._last_message = mock_message
+        Message._state.last_message = mock_message
 
         member_list = []
         callers = 0
@@ -163,7 +159,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
 
         mock_message.delete.assert_called_once()
         mock_logger.info.assert_called_once_with("Deleted voice chat message")
-        self.assertIsNone(Message._last_message)
+        self.assertIsNone(Message._state.last_message)
 
     @patch("message.Message._logger")
     async def test_update_with_callers(self, mock_logger):
@@ -172,7 +168,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_message = AsyncMock(spec=discord.Message)
 
         Message.set_channel(mock_channel)
-        Message._last_message = mock_message
+        Message._state.last_message = mock_message
 
         member_list = [(123, "Alice", None), (456, "Bob", None)]
         callers = 2
@@ -190,13 +186,13 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
     async def test_delete(self, mock_logger):
         """Test delete method."""
         mock_message = AsyncMock(spec=discord.Message)
-        Message._last_message = mock_message
+        Message._state.last_message = mock_message
 
         await Message.delete()
 
         mock_message.delete.assert_called_once()
         mock_logger.info.assert_called_once_with("Deleted voice chat message")
-        self.assertIsNone(Message._last_message)
+        self.assertIsNone(Message._state.last_message)
 
     @patch("message.Message._logger")
     async def test_delete_no_message(self, mock_logger):
@@ -238,14 +234,14 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_message.edit.side_effect = discord.NotFound(Mock(), "Message not found")
 
         Message.set_channel(mock_channel)
-        Message._last_message = mock_message
+        Message._state.last_message = mock_message
 
         member_list = [(123, "Alice", None)]
         callers = 1
 
         await Message.update(member_list, callers)
 
-        self.assertIsNone(Message._last_message)
+        self.assertIsNone(Message._state.last_message)
 
     # Rate Limiting Tests
     @patch("time.time")
@@ -268,8 +264,8 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
 
         # Should not send immediately - should start batch timer
         mock_channel.send.assert_not_called()
-        self.assertIsNotNone(Message._batch_timer)
-        self.assertEqual(len(Message._pending_joins), 1)
+        self.assertIsNotNone(Message._state.batch_timer)
+        self.assertEqual(len(Message._state.pending_joins), 1)
 
     @patch("time.time")
     @patch("asyncio.sleep")
@@ -283,7 +279,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_channel.send.return_value = mock_message
 
         Message.set_channel(mock_channel)
-        Message._last_message_time = 1000.0  # Set previous message time
+        Message._state.last_message_time = 1000.0  # Set previous message time
         mock_time.return_value = 1700.0  # 700 seconds later (>10 minutes)
 
         member_list = [(123, "Alice", None), (456, "Bob", None)]
@@ -293,8 +289,8 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
 
         # Should start batch timer, not send immediately
         mock_channel.send.assert_not_called()
-        self.assertIsNotNone(Message._batch_timer)
-        self.assertEqual(len(Message._pending_joins), 1)  # Latest joiner
+        self.assertIsNotNone(Message._state.batch_timer)
+        self.assertEqual(len(Message._state.pending_joins), 1)  # Latest joiner
 
     @patch("time.time")
     @patch("asyncio.create_task")
@@ -308,7 +304,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_create_task.return_value = mock_task
 
         Message.set_channel(mock_channel)
-        Message._last_message_time = 1000.0  # Set previous message time
+        Message._state.last_message_time = 1000.0  # Set previous message time
         mock_time.return_value = 1300.0  # 300 seconds later (<10 minutes)
 
         member_list = [(123, "Alice", None), (456, "Bob", None)]
@@ -320,7 +316,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_channel.send.assert_not_called()
         # Should queue a task
         mock_create_task.assert_called_once()
-        self.assertTrue(Message._pending_update)
+        self.assertTrue(Message._state.pending_update)
 
     @patch("time.time")
     @patch("asyncio.create_task")
@@ -336,8 +332,8 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_create_task.return_value = mock_new_task
 
         Message.set_channel(mock_channel)
-        Message._last_message_time = 1000.0
-        Message._queued_task = mock_old_task
+        Message._state.last_message_time = 1000.0
+        Message._state.queued_task = mock_old_task
         mock_time.return_value = 1300.0
 
         member_list = [(123, "Alice", None), (456, "Bob", None)]
@@ -350,7 +346,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_old_task.cancel.assert_called_once()
         # Should create new task
         mock_create_task.assert_called_once()
-        self.assertEqual(Message._queued_task, mock_new_task)
+        self.assertEqual(Message._state.queued_task, mock_new_task)
 
     @patch("time.time")
     @patch("asyncio.sleep")
@@ -362,7 +358,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_channel.send.return_value = mock_message
 
         Message.set_channel(mock_channel)
-        Message._pending_update = True
+        Message._state.pending_update = True
         mock_time.return_value = 1600.0  # Time when message is sent
 
         member_list = [(123, "Alice", None), (456, "Bob", None)]
@@ -372,8 +368,8 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
 
         mock_sleep.assert_called_once_with(300.0)
         mock_channel.send.assert_called_once_with("Alice and Bob are in voice chat")
-        self.assertEqual(Message._last_message_time, 1600.0)
-        self.assertFalse(Message._pending_update)
+        self.assertEqual(Message._state.last_message_time, 1600.0)
+        self.assertFalse(Message._state.pending_update)
 
     @patch("time.time")
     @patch("asyncio.sleep")
@@ -401,7 +397,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         """Test that delayed send doesn't send if no pending update."""
         mock_channel = AsyncMock(spec=discord.TextChannel)
         Message.set_channel(mock_channel)
-        Message._pending_update = False  # No pending update
+        Message._state.pending_update = False  # No pending update
 
         member_list = [(123, "Alice", None)]
         callers = 1
@@ -418,7 +414,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         mock_message = AsyncMock(spec=discord.Message)
 
         Message.set_channel(mock_channel)
-        Message._last_message = mock_message
+        Message._state.last_message = mock_message
 
         member_list = [(123, "Alice", None), (456, "Bob", None)]
         callers = 2
@@ -432,38 +428,28 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         # Should not send new message
         mock_channel.send.assert_not_called()
 
-    @patch("database.Database")
     @patch("message.Message._logger")
-    async def test_batched_notification_shows_all_current_users(
-        self, mock_logger, mock_db_class
-    ):
-        """Test that batched notification shows ALL current users, not just batch participants"""
-        # Mock the database
-        mock_db = Mock()
-        mock_db_class.return_value = mock_db
-        mock_db.get_callers.return_value = [
-            (123, "Alice", None),
-            (456, "Bob", None),
-            (789, "Charlie", None),  # Charlie was already in channel
-        ]
-        mock_db.get_num_callers.return_value = 3
-
+    async def test_batched_notification_shows_all_current_users(self, mock_logger):
+        """Test that batched notification shows ALL current users using stored member list"""
         mock_channel = AsyncMock(spec=discord.TextChannel)
         mock_message = Mock(spec=discord.Message)
         mock_channel.send.return_value = mock_message
         Message.set_channel(mock_channel)
 
-        # Simulate Alice and Bob joining during batch (Charlie already there)
-        Message._pending_joins = [(123, "Alice", None), (456, "Bob", None)]
+        # Set up stored member list (this is what the fix provides)
+        all_members = [
+            (123, "Alice", None),
+            (456, "Bob", None),
+            (789, "Charlie", None),  # Charlie was already in channel
+        ]
+        Message._state.batch_member_list = all_members
+        Message._state.batch_callers_count = 3
+        Message._state.pending_joins = [(123, "Alice", None), (456, "Bob", None)]
 
         # Trigger batch send
         await Message._send_batched_notification(0.01)
 
-        # Should call database to get ALL current users
-        mock_db.get_callers.assert_called_once()
-        mock_db.get_num_callers.assert_called_once()
-
-        # Should send message showing all 3 users
+        # Should send message showing all 3 users from stored data
         mock_channel.send.assert_called_once()
         sent_message = mock_channel.send.call_args[0][0]
 
@@ -471,6 +457,47 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Alice", sent_message)
         self.assertIn("Bob", sent_message)
         self.assertIn("Charlie", sent_message)
+        self.assertIn("are in voice chat", sent_message)
+
+    @patch("message.Message._logger")
+    async def test_fourth_player_batching_bug_fixed(self, mock_logger):
+        """Test that the 4th player bug is fixed - batch shows all users from stored data"""
+        mock_channel = AsyncMock(spec=discord.TextChannel)
+        mock_message = Mock(spec=discord.Message)
+        mock_channel.send.return_value = mock_message
+        Message.set_channel(mock_channel)
+
+        # Simulate the full scenario: all 4 users are in channel when Riley joins
+        all_members = [
+            (123, "cailin", None),
+            (456, "fett32", None),
+            (789, "nightwaff", None),
+            (101, "Riley", None),  # Riley is the new joiner
+        ]
+
+        # This simulates what happens when Riley joins - create() stores the member list
+        await Message.create(
+            all_members, 4, is_first_person=False, suppress_notification=False
+        )
+
+        # Verify the batch member list was stored (this is the fix)
+        self.assertEqual(Message._state.batch_member_list, all_members)
+        self.assertEqual(Message._state.batch_callers_count, 4)
+
+        # Execute the batch notification - should use stored data, not query database
+        await Message._send_batched_notification(0.01)
+
+        # Check what message was sent
+        mock_channel.send.assert_called_once()
+        sent_message = mock_channel.send.call_args[0][0]
+
+        print(f"Fixed message: {sent_message}")
+
+        # Should show all 4 players correctly
+        self.assertIn("cailin", sent_message)
+        self.assertIn("fett32", sent_message)
+        self.assertIn("nightwaff", sent_message)
+        self.assertIn("Riley", sent_message)
         self.assertIn("are in voice chat", sent_message)
 
 
