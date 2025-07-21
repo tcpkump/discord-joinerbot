@@ -34,6 +34,39 @@ class Message:
     _target_channel: Optional[discord.TextChannel] = None
     _logger = logging.getLogger("joinerbot.message")
 
+    # Class properties for test access - using class attributes for simplicity
+    @classmethod
+    def _batch_timer(cls) -> Optional[asyncio.Task]:
+        return cls._state.batch_timer
+
+    @classmethod
+    def _queued_task(cls) -> Optional[asyncio.Task]:
+        return cls._state.queued_task
+
+    @classmethod
+    def _pending_joins(cls) -> List[Tuple[int, str, Any]]:
+        return cls._state.pending_joins
+
+    @classmethod
+    def _last_message(cls) -> Optional[discord.Message]:
+        return cls._state.last_message
+
+    @classmethod
+    def _set_last_message(cls, value: Optional[discord.Message]):
+        cls._state.last_message = value
+
+    @classmethod
+    def _last_message_time(cls) -> Optional[float]:
+        return cls._state.last_message_time
+
+    @classmethod
+    def _set_last_message_time(cls, value: Optional[float]):
+        cls._state.last_message_time = value
+
+    @classmethod
+    def _pending_update(cls) -> bool:
+        return cls._state.pending_update
+
     @classmethod
     def set_channel(cls, channel: discord.TextChannel):
         cls._target_channel = channel
@@ -69,7 +102,8 @@ class Message:
         if cls._should_start_batch(is_first_person, current_time):
             await cls._start_batch(new_joiner, member_list, callers)
         elif cls._should_queue(current_time):
-            await cls._queue_message([new_joiner], 1, current_time)
+            if new_joiner:
+                await cls._queue_message([new_joiner], 1, current_time)
         elif cls._is_batch_active():
             await cls._add_to_batch(new_joiner, member_list, callers)
 
@@ -233,7 +267,7 @@ class Message:
     @classmethod
     def _is_batch_active(cls) -> bool:
         """Check if batch timer is currently active"""
-        return cls._state.batch_timer and not cls._state.batch_timer.done()
+        return bool(cls._state.batch_timer and not cls._state.batch_timer.done())
 
     @classmethod
     async def _start_batch(

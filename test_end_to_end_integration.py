@@ -53,10 +53,12 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
         """Clean up any running tasks after each test"""
 
         async def cleanup():
-            if Message._batch_timer and not Message._batch_timer.done():
-                Message._batch_timer.cancel()
-            if Message._queued_task and not Message._queued_task.done():
-                Message._queued_task.cancel()
+            batch_timer = Message._batch_timer()
+            if batch_timer and not batch_timer.done():
+                batch_timer.cancel()
+            queued_task = Message._queued_task()
+            if queued_task and not queued_task.done():
+                queued_task.cancel()
 
         asyncio.run(cleanup())
 
@@ -75,23 +77,25 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.sent_messages), 0)
         self.assertIsNotNone(Message._state.batch_timer)
         self.assertEqual(len(Message._state.pending_joins), 1)
-        self.assertEqual(Message._pending_joins[0][1], "Alice")
+        self.assertEqual(Message._pending_joins()[0][1], "Alice")
 
         # Wait for batch timer to complete
-        await Message._batch_timer
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer
 
         # Should send single caller message
         self.assertEqual(len(self.sent_messages), 1)
         self.assertEqual(self.sent_messages[0].content, "Alice joined voice chat")
-        self.assertIsNotNone(Message._last_message_time)
+        self.assertIsNotNone(Message._last_message_time())
 
         # Caller leaves
         await Message.delete()
 
         # Should delete the message and clear state
         self.assertEqual(len(self.deleted_messages), 1)
-        self.assertIsNone(Message._last_message)
-        self.assertEqual(len(Message._pending_joins), 0)
+        self.assertIsNone(Message._last_message())
+        self.assertEqual(len(Message._pending_joins()), 0)
 
     @patch("time.time")
     async def test_two_callers_batched_together(self, mock_time):
@@ -112,7 +116,9 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.sent_messages), 0)
 
         # Wait for batch timer to complete
-        await Message._batch_timer
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer
 
         # Should send message showing both users
         self.assertEqual(len(self.sent_messages), 1)
@@ -145,13 +151,15 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
 
         # All should be in pending joins
         self.assertEqual(len(Message._state.pending_joins), 3)
-        usernames = [member[1] for member in Message._pending_joins]
+        usernames = [member[1] for member in Message._pending_joins()]
         self.assertIn("Alice", usernames)
         self.assertIn("Bob", usernames)
         self.assertIn("Charlie", usernames)
 
         # Wait for batch completion
-        await Message._batch_timer
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer
 
         # Should send message with all 3 users
         self.assertEqual(len(self.sent_messages), 1)
@@ -186,10 +194,12 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
         await Message.create(member_list, 4, is_first_person=False)
 
         # Should have 4 people in batch
-        self.assertEqual(len(Message._pending_joins), 4)
+        self.assertEqual(len(Message._pending_joins()), 4)
 
         # Wait for batch completion
-        await Message._batch_timer
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer
 
         # Should send message with all 4 names explicitly listed
         self.assertEqual(len(self.sent_messages), 1)
@@ -223,7 +233,9 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
             await Message.create(member_list[:i], i, is_first_person=False)
 
         # Wait for batch completion
-        await Message._batch_timer
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer
 
         # Should send message with first 3 names + "4 others"
         self.assertEqual(len(self.sent_messages), 1)
@@ -242,11 +254,13 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
         # Phase 1: Initial batch (Alice joins first)
         mock_time.return_value = 1000.0
         await Message.create([(123, "Alice", None)], 1, is_first_person=True)
-        await Message._batch_timer  # Complete initial batch
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer  # Complete initial batch
 
         self.assertEqual(len(self.sent_messages), 1)
         self.assertEqual(self.sent_messages[0].content, "Alice joined voice chat")
-        Message._last_message_time = 1000.0  # Simulate message timestamp
+        Message._set_last_message_time(1000.0)  # Simulate message timestamp
 
         # Phase 2: Bob joins within 10 minutes - should update message immediately + queue notification
         mock_time.return_value = 1300.0  # 5 minutes later
@@ -264,9 +278,10 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
         )
 
         # Should queue message (not start batch timer) since within 10 minutes
-        self.assertTrue(Message._batch_timer is None or Message._batch_timer.done())
-        self.assertIsNotNone(Message._queued_task)
-        self.assertTrue(Message._pending_update)
+        batch_timer = Message._batch_timer()
+        self.assertTrue(batch_timer is None or batch_timer.done())
+        self.assertIsNotNone(Message._queued_task())
+        self.assertTrue(Message._pending_update())
 
         # Phase 3: Charlie joins - also within 10 minutes
         mock_time.return_value = 1400.0  # 6 minutes after first message
@@ -287,7 +302,7 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
         )
 
         # Should still be queuing (old task cancelled, new one created)
-        self.assertIsNotNone(Message._queued_task)
+        self.assertIsNotNone(Message._queued_task())
 
     @patch("time.time")
     async def test_new_batch_after_10_minutes(self, mock_time):
@@ -295,8 +310,10 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
         # Initial message
         mock_time.return_value = 1000.0
         await Message.create([(123, "Alice", None)], 1, is_first_person=True)
-        await Message._batch_timer
-        Message._last_message_time = 1000.0
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer
+        Message._set_last_message_time(1000.0)
 
         # More than 10 minutes later (700 seconds = 11+ minutes)
         mock_time.return_value = 1700.0
@@ -306,13 +323,19 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Should start NEW batch timer (not queue)
         self.assertIsNotNone(Message._state.batch_timer)
-        self.assertFalse(Message._batch_timer.done())
-        self.assertTrue(Message._queued_task is None or Message._queued_task.done())
-        self.assertFalse(Message._pending_update)
+        batch_timer = Message._batch_timer()
+        self.assertIsNotNone(batch_timer)
+        if batch_timer:  # for type checker
+            self.assertFalse(batch_timer.done())
+        queued_task = Message._queued_task()
+        self.assertTrue(queued_task is None or queued_task.done())
+        self.assertFalse(Message._pending_update())
         self.assertEqual(len(Message._state.pending_joins), 1)  # New joiner (Bob)
 
         # Wait for new batch
-        await Message._batch_timer
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer
 
         # Should delete old message and send new one
         self.assertEqual(len(self.deleted_messages), 1)
@@ -339,7 +362,9 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
         for i, members in enumerate(member_lists):
             await Message.create(members, i + 1, is_first_person=(i == 0))
 
-        await Message._batch_timer
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer
         original_content = self.sent_messages[0].content
         self.assertIn("David", original_content)  # All 4 should be there
 
@@ -360,7 +385,7 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Should delete message when count reaches 0
         self.assertEqual(len(self.deleted_messages), 1)
-        self.assertIsNone(Message._last_message)
+        self.assertIsNone(Message._last_message())
 
     @patch("time.time")
     async def test_rejoin_suppression_integration(self, mock_time):
@@ -369,7 +394,9 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Alice joins (not a rejoin)
         await Message.create([(123, "Alice", None)], 1, is_first_person=True)
-        await Message._batch_timer
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer
 
         # Bob joins normally
         mock_time.return_value = 1100.0
@@ -395,9 +422,10 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
 
         # But should NOT start NEW batch timer or queue message for Charlie's rejoin
         # (But Bob's join may have created a queued task which is expected)
-        self.assertTrue(Message._batch_timer is None or Message._batch_timer.done())
+        batch_timer = Message._batch_timer()
+        self.assertTrue(batch_timer is None or batch_timer.done())
         self.assertEqual(
-            len(Message._pending_joins), 0
+            len(Message._pending_joins()), 0
         )  # No new pending joins from rejoin
 
     @patch("time.time")
@@ -414,8 +442,10 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
         )
 
         # T=30: Batch completes, sends "Alice and Bob are in voice chat"
-        await Message._batch_timer
-        Message._last_message_time = 1030.0  # When message was actually sent
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer
+        Message._set_last_message_time(1030.0)  # When message was actually sent
 
         # T=200: Charlie joins (within 10-minute window) - should queue
         mock_time.return_value = 1230.0  # 200 seconds after batch message
@@ -429,8 +459,9 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
         )
 
         # Should have queued notification, not started new batch
-        self.assertTrue(Message._batch_timer is None or Message._batch_timer.done())
-        self.assertIsNotNone(Message._queued_task)
+        batch_timer = Message._batch_timer()
+        self.assertTrue(batch_timer is None or batch_timer.done())
+        self.assertIsNotNone(Message._queued_task())
 
         # T=800: David joins (>10 minutes after last message) - should start new batch
         mock_time.return_value = (
@@ -458,13 +489,18 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Should start new batch timer now
         self.assertIsNotNone(Message._state.batch_timer)
-        self.assertFalse(Message._batch_timer.done())
+        batch_timer = Message._batch_timer()
+        self.assertIsNotNone(batch_timer)
+        if batch_timer:  # for type checker
+            self.assertFalse(batch_timer.done())
         self.assertEqual(
             len(Message._state.pending_joins), 1
         )  # Just David (the new joiner)
 
         # Complete new batch
-        await Message._batch_timer
+        batch_timer = Message._batch_timer()
+        if batch_timer:
+            await batch_timer
 
         # Should have deleted old message and sent new one
         self.assertEqual(len(self.deleted_messages), 1)
@@ -486,14 +522,17 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Verify batch is running
         self.assertIsNotNone(Message._state.batch_timer)
-        self.assertFalse(Message._batch_timer.done())
+        batch_timer = Message._batch_timer()
+        self.assertIsNotNone(batch_timer)
+        if batch_timer:  # for type checker
+            self.assertFalse(batch_timer.done())
 
         # Everyone leaves before batch completes
         await Message.delete()
 
         # Should cancel batch timer and clear state
-        self.assertEqual(len(Message._pending_joins), 0)
-        self.assertIsNone(Message._last_message)
+        self.assertEqual(len(Message._pending_joins()), 0)
+        self.assertIsNone(Message._last_message())
 
     @patch("time.time")
     async def test_message_formatting_in_realistic_scenarios(self, mock_time):
@@ -542,7 +581,9 @@ class TestEndToEndIntegration(unittest.IsolatedAsyncioTestCase):
                 await Message.create(
                     member_list, len(member_list), is_first_person=True
                 )
-                await Message._batch_timer
+                batch_timer = Message._batch_timer()
+                if batch_timer:
+                    await batch_timer
 
                 # Check message content
                 self.assertEqual(len(self.sent_messages), 1)

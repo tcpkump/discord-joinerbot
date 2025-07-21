@@ -197,7 +197,7 @@ class TestMessage(unittest.IsolatedAsyncioTestCase):
     @patch("message.Message._logger")
     async def test_delete_no_message(self, mock_logger):
         """Test delete method when no message exists."""
-        Message._last_message = None
+        Message._set_last_message(None)
 
         await Message.delete()
 
