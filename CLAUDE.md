@@ -45,8 +45,7 @@ This Discord bot monitors voice channel joins/leaves and sends smart batched not
 
 **Message (`message.py`)**
 - Singleton-like class managing Discord text notifications
-- Implements 30-second batching for first-time joins
-- 10-minute queuing system for subsequent notifications
+- Implements 30-second batching for all joins
 - State management via class variables (not thread-safe by design)
 - Key methods: `create()`, `update()`, `delete()`
 
@@ -58,13 +57,10 @@ This Discord bot monitors voice channel joins/leaves and sends smart batched not
 
 ### Message Flow Logic
 
-1. **First Join**: Starts 30-second batch timer, collects additional joiners
-2. **Batch Send**: After 30 seconds, sends single notification for all batched users
-3. **Subsequent Joins**: 
-   - If <10 minutes since last message: queues individual notification
-   - If >10 minutes: starts new 30-second batch
-4. **Rejoin Detection**: Suppresses notifications if user joined within 5 minutes
-5. **Message Management**: Always maintains single message, deletes previous when sending new
+1. **Any Join**: Starts or joins existing 30-second batch timer, collects joiners
+2. **Batch Send**: After 30 seconds, sends single notification showing all current voice chat users
+3. **Rejoin Detection**: Suppresses notifications if user joined within 5 minutes
+4. **Message Management**: Always maintains single message, deletes previous when sending new
 
 ### Database Schema
 

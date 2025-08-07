@@ -19,7 +19,6 @@ class JoinerBot(discord.Client):
         if self.user is not None:
             self.logger.info(f"Logged in as {self.user} (ID: {self.user.id})")
 
-            # Set up message target channel
             if self.guilds:
                 for guild in self.guilds:
                     for ch in guild.channels:
@@ -44,7 +43,7 @@ class JoinerBot(discord.Client):
 
         if action == "leave":
             await self._handle_leave(member, before)
-        else:  # join
+        else:
             await self._handle_join(member, after)
 
     def _get_voice_action(self, before, after):
@@ -53,7 +52,7 @@ class JoinerBot(discord.Client):
         after_watched = str(after.channel) == self.watched_channel
 
         if not before_watched and not after_watched:
-            return None  # Not our channel
+            return None
         elif before_watched and not after_watched:
             return "leave"
         elif after_watched and not before_watched:
@@ -69,7 +68,7 @@ class JoinerBot(discord.Client):
         callers = self.db.get_num_callers()
         if callers > 0:
             member_list = self.db.get_callers()
-            await Message.update(member_list, callers)
+            await Message.update(member_list)
         else:
             await Message.delete()
 
@@ -77,25 +76,18 @@ class JoinerBot(discord.Client):
         """Handle member joining the watched channel"""
         self.logger.info(f"Action: {member.name} joined {after.channel.name}")
 
-        # Check if this is a recent rejoin (within 5 minutes)
         is_recent_rejoin = self.db.was_recently_connected(member.id, 5)
 
         self.db.log_join_leave(member.id, member.display_name, "join")
         self.db.add_caller(member.id, member.display_name)
 
-        # Get current state
         callers = self.db.get_num_callers()
         member_list = self.db.get_callers()
-        is_first_person = callers == 1
 
-        # Always update existing message first if not first person
-        if not is_first_person:
-            await Message.update(member_list, callers)
+        if callers > 1:
+            await Message.update(member_list)
 
-        # Send notification (batched or queued)
         await Message.create(
             member_list,
-            callers,
-            is_first_person=is_first_person,
             suppress_notification=is_recent_rejoin,
         )

@@ -6,10 +6,11 @@ their friends are "online" and ready to chat/game.
 
 ## Features
 
-- **Smart Batching**: When the first user joins, waits 30 seconds to batch additional joins into a single notification
+- **Smart Batching**: When any user joins, starts or joins existing 30-second batch timer to collect multiple joins into a single notification
+- **Comprehensive Notifications**: Messages show all current voice channel users, not just new joiners
+- **Single Message Management**: Maintains one notification message, deleting previous ones when sending updates
 - **Rejoin Suppression**: Users who disconnect have a 5-minute grace period to rejoin without triggering spam notifications
-- **Message Queuing**: Subsequent joins after initial batch are queued and sent every 10 minutes to prevent notification overload
-- **PostgreSQL Integration**: Tracks join/leave history and current voice channel participants
+- **PostgreSQL Integration**: Tracks join/leave history and current voice channel participants with full audit trail
 
 ## Local Development Setup
 

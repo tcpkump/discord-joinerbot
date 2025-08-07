@@ -29,12 +29,10 @@ def validate_environment():
 
 
 def main():
-    # Load configuration from environment variables/.env file
     _ = load_dotenv()
 
     validate_environment()
 
-    # Configure logging
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
         level=getattr(logging, log_level),
