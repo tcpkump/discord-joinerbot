@@ -1,5 +1,6 @@
 import os
-from typing import List
+import time
+from typing import Dict, List
 
 import psycopg
 
@@ -10,6 +11,7 @@ class Database:
             "DATABASE_URL", "postgresql://localhost/joinerbot"
         )
         self._connection = None
+        self.recent_leavers: Dict[int, float] = {}
         self._init_tables()
 
     def _get_connection(self):
@@ -29,7 +31,7 @@ class Database:
                     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """
-            )  # user_id/username are separate because people like to change names :)
+            )
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS join_leave_history (
@@ -85,6 +87,10 @@ class Database:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM callers WHERE user_id = %s", (user_id,))
                 conn.commit()
+
+                self.recent_leavers[user_id] = time.time()
+                self._cleanup_old_leavers()
+
                 return cur.rowcount > 0
         except Exception as e:
             conn.rollback()
@@ -107,20 +113,24 @@ class Database:
             return False
 
     def was_recently_connected(self, user_id: int, minutes: int = 5) -> bool:
-        """Check if user was connected within the last X minutes"""
-        conn = self._get_connection()
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT COUNT(*) FROM join_leave_history
-                WHERE user_id = %s
-                AND action = 'join'
-                AND timestamp > NOW() - INTERVAL '%s minutes'
-                """,
-                (user_id, minutes),
-            )
-            result = cur.fetchone()
-            return (result[0] if result else 0) > 0
+        """Check if user left recently and is rejoining (rejoin suppression)"""
+        if user_id not in self.recent_leavers:
+            return False
+
+        leave_time = self.recent_leavers[user_id]
+        time_since_leave = time.time() - leave_time
+        return time_since_leave < (minutes * 60)
+
+    def _cleanup_old_leavers(self, minutes: int = 5):
+        """Remove entries older than specified minutes from recent_leavers"""
+        current_time = time.time()
+        cutoff_time = current_time - (minutes * 60)
+
+        self.recent_leavers = {
+            user_id: leave_time
+            for user_id, leave_time in self.recent_leavers.items()
+            if leave_time > cutoff_time
+        }
 
     def close(self):
         if self._connection and not self._connection.closed:
