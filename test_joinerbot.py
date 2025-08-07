@@ -93,13 +93,13 @@ class TestJoinerBot(unittest.IsolatedAsyncioTestCase):
         mock_before = Mock()
         mock_before.channel.name = "test-voice"
 
-        self.bot.db.get_num_callers.return_value = 2
-        self.bot.db.get_callers.return_value = [(456, "Bob", None)]
+        self.mock_db.get_num_callers.return_value = 2
+        self.mock_db.get_callers.return_value = [(456, "Bob", None)]
 
         await self.bot._handle_leave(mock_member, mock_before)
 
-        self.bot.db.log_join_leave.assert_called_once_with(123, "Alice", "leave")
-        self.bot.db.del_caller.assert_called_once_with(123)
+        self.mock_db.log_join_leave.assert_called_once_with(123, "Alice", "leave")
+        self.mock_db.del_caller.assert_called_once_with(123)
 
         mock_message_class.update.assert_called_once_with([(456, "Bob", None)])
         mock_message_class.delete.assert_not_called()
@@ -118,12 +118,12 @@ class TestJoinerBot(unittest.IsolatedAsyncioTestCase):
         mock_before = Mock()
         mock_before.channel.name = "test-voice"
 
-        self.bot.db.get_num_callers.return_value = 0
+        self.mock_db.get_num_callers.return_value = 0
 
         await self.bot._handle_leave(mock_member, mock_before)
 
-        self.bot.db.log_join_leave.assert_called_once_with(123, "Alice", "leave")
-        self.bot.db.del_caller.assert_called_once_with(123)
+        self.mock_db.log_join_leave.assert_called_once_with(123, "Alice", "leave")
+        self.mock_db.del_caller.assert_called_once_with(123)
 
         mock_message_class.delete.assert_called_once()
         mock_message_class.update.assert_not_called()
@@ -142,15 +142,15 @@ class TestJoinerBot(unittest.IsolatedAsyncioTestCase):
         mock_after = Mock()
         mock_after.channel.name = "test-voice"
 
-        self.bot.db.was_recently_connected.return_value = False
-        self.bot.db.get_num_callers.return_value = 1
-        self.bot.db.get_callers.return_value = [(123, "Alice", None)]
+        self.mock_db.was_recently_connected.return_value = False
+        self.mock_db.get_num_callers.return_value = 1
+        self.mock_db.get_callers.return_value = [(123, "Alice", None)]
 
         await self.bot._handle_join(mock_member, mock_after)
 
-        self.bot.db.was_recently_connected.assert_called_once_with(123, 5)
-        self.bot.db.log_join_leave.assert_called_once_with(123, "Alice", "join")
-        self.bot.db.add_caller.assert_called_once_with(123, "Alice")
+        self.mock_db.was_recently_connected.assert_called_once_with(123, 5)
+        self.mock_db.log_join_leave.assert_called_once_with(123, "Alice", "join")
+        self.mock_db.add_caller.assert_called_once_with(123, "Alice")
 
         mock_message_class.update.assert_not_called()
         mock_message_class.create.assert_called_once_with(
@@ -171,18 +171,18 @@ class TestJoinerBot(unittest.IsolatedAsyncioTestCase):
         mock_after = Mock()
         mock_after.channel.name = "test-voice"
 
-        self.bot.db.was_recently_connected.return_value = False
-        self.bot.db.get_num_callers.return_value = 2
-        self.bot.db.get_callers.return_value = [
+        self.mock_db.was_recently_connected.return_value = False
+        self.mock_db.get_num_callers.return_value = 2
+        self.mock_db.get_callers.return_value = [
             (123, "Alice", None),
             (456, "Bob", None),
         ]
 
         await self.bot._handle_join(mock_member, mock_after)
 
-        self.bot.db.was_recently_connected.assert_called_once_with(456, 5)
-        self.bot.db.log_join_leave.assert_called_once_with(456, "Bob", "join")
-        self.bot.db.add_caller.assert_called_once_with(456, "Bob")
+        self.mock_db.was_recently_connected.assert_called_once_with(456, 5)
+        self.mock_db.log_join_leave.assert_called_once_with(456, "Bob", "join")
+        self.mock_db.add_caller.assert_called_once_with(456, "Bob")
 
         mock_message_class.update.assert_called_once_with(
             [(123, "Alice", None), (456, "Bob", None)]
@@ -205,18 +205,18 @@ class TestJoinerBot(unittest.IsolatedAsyncioTestCase):
         mock_after = Mock()
         mock_after.channel.name = "test-voice"
 
-        self.bot.db.was_recently_connected.return_value = True
-        self.bot.db.get_num_callers.return_value = 2
-        self.bot.db.get_callers.return_value = [
+        self.mock_db.was_recently_connected.return_value = True
+        self.mock_db.get_num_callers.return_value = 2
+        self.mock_db.get_callers.return_value = [
             (123, "Alice", None),
             (456, "Bob", None),
         ]
 
         await self.bot._handle_join(mock_member, mock_after)
 
-        self.bot.db.was_recently_connected.assert_called_once_with(456, 5)
-        self.bot.db.log_join_leave.assert_called_once_with(456, "Bob", "join")
-        self.bot.db.add_caller.assert_called_once_with(456, "Bob")
+        self.mock_db.was_recently_connected.assert_called_once_with(456, 5)
+        self.mock_db.log_join_leave.assert_called_once_with(456, "Bob", "join")
+        self.mock_db.add_caller.assert_called_once_with(456, "Bob")
 
         mock_message_class.update.assert_called_once_with(
             [(123, "Alice", None), (456, "Bob", None)]
